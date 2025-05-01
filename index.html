@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Shroomtop420® OmniPaste v4.1 — HTML Deployer + Notion Sync</title>
+  <style>
+    :root {
+      --bg: #000;
+      --fg: #0ff;
+      --accent: #00ffee;
+      --card-bg: #111;
+      --card-border: #0ff;
+      --text: #eee;
+      --error: #f55;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: monospace;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    header {
+      width: 100%;
+      background: var(--card-bg);
+      border-bottom: 2px solid var(--accent);
+      padding: 1rem 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    header svg { margin-right: 0.5rem; fill: var(--fg); }
+    header h1 { margin: 0; font-size: 1.4rem; color: var(--fg); }
+    .container {
+      width: 90vw; max-width: 800px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 1rem; margin: 1rem 0;
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+    #dropzone {
+      border: 2px dashed var(--fg);
+      padding: 20px; text-align: center;
+      color: var(--fg); border-radius: 4px;
+      transition: background 0.3s;
+    }
+    #dropzone:hover { background: rgba(0,255,255,0.1); }
+    textarea, input {
+      width: 100%; background: var(--bg);
+      color: var(--fg); border: 1px solid var(--accent);
+      padding: 0.5rem; border-radius: 4px;
+    }
+    .row {
+      display: flex; flex-wrap: wrap; gap: 0.5rem;
+    }
+    button {
+      background: var(--accent); color: var(--bg);
+      border: none; padding: 0.6rem 1.2rem; border-radius: 4px;
+      cursor: pointer; transition: background 0.3s;
+      display: inline-flex; align-items: center;
+    }
+    button:hover { background: var(--fg); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #previewFrame {
+      width: 100%; height: 300px;
+      border: 1px solid var(--card-border);
+      border-radius: 4px; background: var(--card-bg);
+    }
+    #loader {
+      display: none; width: 20px; height: 20px;
+      border: 2px solid var(--card-bg);
+      border-top: 2px solid var(--fg);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+      margin-left: 0.5rem;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0); } 100% { transform: rotate(360deg); }
+    }
+    #toast {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--card-bg); color: var(--text);
+      padding: 0.6rem 1rem; border: 1px solid var(--fg);
+      border-radius: 4px; opacity: 0; transition: opacity 0.3s;
+      z-index: 100;
+    }
+    #toast.show { opacity: 1; }
+    #toast.error { border-color: var(--error); color: var(--error); }
+  </style>
+</head>
+<body>
+  <header>
+    <svg width="28" height="28" viewBox="0 0 64 64">
+      <path d="M10 32a22 22 0 1144 0v8H10z"/>
+      <path d="M22 40v12h20V40z"/>
+    </svg>
+    <h1>OmniPaste v4.1</h1>
+  </header>
+
+  <div class="container">
+    <div id="dropzone">Drag &amp; drop an HTML file here</div>
+    <textarea id="htmlInput" placeholder="Paste full HTML including &lt;!DOCTYPE html&gt;…"></textarea>
+
+    <div class="row">
+      <input id="repo" placeholder="GitHub Repo Name"/>
+      <input id="user" placeholder="GitHub Username"/>
+      <input id="token" placeholder="GitHub Token"/>
+      <label><input type="checkbox" id="isPrivate"/> Private Repo</label>
+    </div>
+
+    <div class="row">
+      <button onclick="saveToken()">Save Token</button>
+      <button onclick="previewHTML()">Preview</button>
+      <button onclick="pushToGitHub()">Push to GitHub<div id="loader"></div></button>
+      <button onclick="createGist()">Create Gist</button>
+    </div>
+
+    <iframe id="previewFrame"></iframe>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    const NOTION_TOKEN = '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';
+    const DATABASE_ID  = '1e6d699204ac80538308c4494aa7a53f';
+    const loader = document.getElementById('loader'), toast = document.getElementById('toast');
+
+    function showLoader()     { loader.style.display = 'inline-block'; }
+    function hideLoader()     { loader.style.display = 'none'; }
+    function disableButtons(){ document.querySelectorAll('button').forEach(b=>b.disabled=true); }
+    function enableButtons() { document.querySelectorAll('button').forEach(b=>b.disabled=false); }
+
+    function showToast(msg, isError=false) {
+      toast.textContent = msg;
+      toast.className = isError ? 'error show' : 'show';
+      setTimeout(()=> toast.className = '', 4000);
+    }
+
+    // drag/drop
+    document.getElementById('dropzone').addEventListener('dragover', e=>{ e.preventDefault(); });
+    document.getElementById('dropzone').addEventListener('drop', async e=>{
+      e.preventDefault();
+      const text = await e.dataTransfer.files[0].text();
+      htmlInput.value = text;
+      showToast('Loaded ' + e.dataTransfer.files[0].name);
+    });
+
+    function saveToken(){
+      const t = token.value.trim();
+      if(t){ localStorage.setItem('gh_token', btoa(t)); showToast('Token saved'); }
+    }
+
+    function previewHTML(){
+      const blob = new Blob([htmlInput.value], {type:'text/html'});
+      previewFrame.src = URL.createObjectURL(blob);
+    }
+
+    async function sendToNotion(url){
+      const p = {
+        parent:{database_id:DATABASE_ID},
+        properties:{
+          Name:{ title:[{ text:{content:`OmniPaste: ${new Date().toISOString()}`} }] },
+          URL:{ url }
+        }
+      };
+      const res = await fetch('https://api.notion.com/v1/pages',{
+        method:'POST',
+        headers:{
+          'Authorization':`Bearer ${NOTION_TOKEN}`,
+          'Content-Type':'application/json',
+          'Notion-Version':'2022-06-28'
+        },
+        body: JSON.stringify(p)
+      });
+      if(!res.ok){
+        const err = await res.text();
+        showToast(`Notion error: ${res.status} ${res.statusText}`, true);
+        console.error('Notion:', err);
+      } else showToast('Notion synced ✓');
+    }
+
+    async function pushToGitHub(){
+      disableButtons(); showLoader();
+      try {
+        const html = htmlInput.value.trim(),
+              repo = repoInput.value.trim(),
+              user = userInput.value.trim(),
+              token = atob(localStorage.getItem('gh_token')||''),
+              isPrivate = isPrivateInput.checked;
+        if(!html||!repo||!user||!token) throw new Error('All fields required');
+
+        // create or get repo
+        const r1 = await fetch('https://api.github.com/user/repos',{
+          method:'POST',
+          headers:{'Authorization':`token ${token}`,'Content-Type':'application/json'},
+          body: JSON.stringify({name:repo,private:isPrivate})
+        });
+        const j1 = await r1.json();
+        if(r1.status === 422 && j1.message.includes('exists')) {
+          showToast('Repo exists, continuing…');
+        } else if(!r1.ok){
+          throw new Error(`Create repo failed: ${j1.message||r1.statusText}`);
+        } else {
+          showToast('Repo created ✓');
+        }
+
+        const branch = j1.default_branch || 'main';
+
+        // commit index.html
+        const path = `https://api.github.com/repos/${user}/${repo}/contents/index.html`;
+        const encoded = btoa(unescape(encodeURIComponent(html)));
+        const r2 = await fetch(path, {
+          method:'PUT',
+          headers:{'Authorization':`token ${token}`,'Content-Type':'application/json'},
+          body: JSON.stringify({
+            message:'OmniPaste commit',
+            content:encoded,
+            branch
+          })
+        });
+        const j2 = await r2.json();
+        if(!r2.ok) throw new Error(`Commit failed: ${j2.message||r2.statusText}`);
+        showToast('Committed ✓');
+
+        // enable GitHub Pages
+        const r3 = await fetch(`https://api.github.com/repos/${user}/${repo}/pages`,{
+          method:'POST',
+          headers:{'Authorization':`token ${token}`}
+        });
+        if(!r3.ok){
+          const j3 = await r3.json();
+          console.warn('Pages:', j3);
+        }
+
+        const deployed = `https://${user}.github.io/${repo}/`;
+        showToast('Live at ' + deployed);
+        await sendToNotion(deployed);
+
+      } catch(err){
+        console.error(err);
+        showToast(err.message, true);
+      } finally {
+        hideLoader(); enableButtons();
+      }
+    }
+
+    async function createGist(){
+      try {
+        const html = htmlInput.value.trim(),
+              token = atob(localStorage.getItem('gh_token')||'');
+        if(!html||!token) throw new Error('HTML & token required');
+        const res = await fetch('https://api.github.com/gists',{
+          method:'POST',
+          headers:{'Authorization':`token ${token}`,'Content-Type':'application/json'},
+          body: JSON.stringify({
+            description:'OmniPaste HTML Gist',
+            public:true,
+            files:{'index.html':{content:html}}
+          })
+        });
+        const j = await res.json();
+        if(!res.ok) throw new Error(j.message||res.statusText);
+        showToast('Gist ✓');
+        window.open(j.html_url,'_blank');
+      } catch(err){
+        console.error(err);
+        showToast(`Gist error: ${err.message}`, true);
+      }
+    }
+
+    // element shortcuts
+    const htmlInput    = document.getElementById('htmlInput'),
+          repoInput    = document.getElementById('repo'),
+          userInput    = document.getElementById('user'),
+          tokenInput   = document.getElementById('token'),
+          isPrivateInput = document.getElementById('isPrivate'),
+          previewFrame = document.getElementById('previewFrame');
+
+    // load saved token
+    (()=>{
+      const t = localStorage.getItem('gh_token');
+      if(t) tokenInput.value = atob(t);
+    })();
+  </script>
+</body>
+</html>
